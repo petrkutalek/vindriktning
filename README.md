@@ -111,12 +111,12 @@ the pins above against your revision.
 | `bthome.py`        | BTHome v2 frame encoder (no hardware dependencies). |
 | `pm1006.py`        | PM1006 driver. |
 | `bme688.py`        | BME688 driver (temperature, pressure, humidity). |
-| `config.py`        | Per-device settings: measurement intervals, advertising period, advertised name and appearance, BME688 address. Stays as plain `.py`. |
+| `config.py`        | Per-device settings: measurement intervals, advertising period, advertised name and appearance, BME688 address. |
 | `Makefile`         | Compile, upload and reset targets. |
 
 ## Build and deploy
 
-Everything except `main.py` and `config.py` is compiled to `.mpy` with `mpy-cross` from the same
+Everything except `main.py` is compiled to `.mpy` with `mpy-cross` from the same
 MicroPython release as the firmware (1.29), and only the `.mpy` files are uploaded.
 
 Requirements: `make` and `mpremote` in `PATH`, and the `mpy-cross` 1.29.0 binary as
@@ -132,8 +132,8 @@ make deploy PORT=/dev/ttyACM0  # different serial port
 
 | Target    | Action |
 |-----------|--------|
-| `build`   | Compile `app`, `pm1006`, `bme688` and `bthome` to `.mpy`. |
-| `upload`  | Build, then copy the `.mpy` files, `main.py` and `config.py` to the board. |
+| `build`   | Compile `app`, `pm1006`, `bme688`, `bthome` and `config` to `.mpy`. |
+| `upload`  | Build, then copy the `.mpy` files, `main.py` to the board. |
 | `reset`   | Reset the board. |
 | `deploy`  | `upload` + `reset` (default target). |
 | `repl`    | Open the serial console. |

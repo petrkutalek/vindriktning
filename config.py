@@ -13,7 +13,7 @@ MEASURE_ATTEMPTS = 3
 
 # The latest measurements are advertised once every ADV_PERIOD_S seconds in one BTHome frame.
 # Integer, 1..10 (the advertising interval of the controller is 10.24 s at most).
-ADV_PERIOD_S = 10
+ADV_PERIOD_S = 6
 
 # Scan response data: complete local name and appearance (0x0542 = air quality sensor,
 # Bluetooth SIG Assigned Numbers).

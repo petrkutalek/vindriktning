@@ -3,9 +3,9 @@ MPREMOTE    ?= mpremote connect $(PORT)
 MPY_CROSS   ?= ./mpy-cross-1.29.0
 MPY_FLAGS   ?= -O2 -march=xtensawin
 
-MODULES := app pm1006 bme688 bthome
+MODULES := app pm1006 bme688 bthome config
 MPY     := $(MODULES:%=%.mpy)
-PLAIN   := main.py config.py
+PLAIN   := main.py
 
 .PHONY: all build upload reset deploy repl clean
 
