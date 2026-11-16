@@ -1,7 +1,7 @@
 PORT        ?= /dev/ttyUSB0
 MPREMOTE    ?= mpremote connect $(PORT)
 MPY_CROSS   ?= ./mpy-cross-1.29.0
-MPY_FLAGS   ?= -O3 -march=xtensa
+MPY_FLAGS   ?= -O2 -march=xtensawin
 
 MODULES := app pm1006 bme688 bthome
 MPY     := $(MODULES:%=%.mpy)

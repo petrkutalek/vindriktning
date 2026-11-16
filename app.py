@@ -11,7 +11,6 @@ from bme688 import BME688
 from bthome import encode
 from config import (
     ADV_APPEARANCE,
-    ADV_JITTER_MS,
     ADV_NAME,
     ADV_PERIOD_S,
     BME688_ADDR,
@@ -19,9 +18,9 @@ from config import (
     MEASURE_ATTEMPTS,
     PM25_INTERVAL_S,
 )
-from pm1006 import BAUDRATE, MEASURE_S, PM1006, UART_TIMEOUT_CHAR_MS, UART_TIMEOUT_MS
+from pm1006 import BAUDRATE, PM1006
 
-VERSION = "2.0.4"
+VERSION = "2.1.0"
 
 # Board wiring (LaskaKit ESP-VINDRIKTNING ESP-32 I2C).
 PIN_FAN = 12
@@ -31,26 +30,23 @@ PIN_I2C_SDA = 21
 PIN_I2C_SCL = 22
 I2C_FREQ_HZ = 100_000
 
-ADV_INTERVAL_MS = 100
-# The scan response data is 31 bytes at most: the name needs a 2 byte AD structure header and the
-# appearance structure takes 4 bytes.
-ADV_NAME_MAX_LEN = 31 - 2 - 4
-
 WDT_TIMEOUT_S = 180
 WDT_FEED_PERIOD_S = 10
 FATAL_RESET_DELAY_S = 10
 
 
 class Advertiser:
-    """Broadcasts one BTHome v2 frame as a single advertising event.
+    """Advertises one BTHome v2 frame continuously, once every period_s seconds.
 
-    Advertising is started and stopped half an interval later, before the second event is due.
-    The packet id changes only when the transmitted data change, so receivers can recognise a
-    repeated frame as a duplicate. Advertising is non-connectable, so nothing can connect.
+    The controller repeats the frame by itself; advertising is restarted only when the data
+    change. The packet id changes with the data, so receivers can recognise a repeated frame as
+    a duplicate. Advertising is non-connectable, so nothing can connect; it is scannable, so an
+    active scanner can get the name and appearance.
     """
 
-    def __init__(self, ble, name, appearance):
+    def __init__(self, ble, period_s, name, appearance):
         self._ble = ble
+        self._interval_us = period_s * 1_000_000
         name = name.encode()
         # Scan response: AD structures Complete Local Name (0x09) and Appearance (0x19).
         self._resp_data = (
@@ -61,38 +57,39 @@ class Advertiser:
         )
         self._payload = None
         # The start counts as a success.
-        self._last_sent = time.ticks_ms()
+        self._last_ok = time.ticks_ms()
         # Random start, so that the first frame after a reboot is not taken for a duplicate.
         self._packet_id = random.getrandbits(8)
 
-    async def send(self, **values):
+    def update(self, **values):
+        """Advertise the given values; advertising is stopped while there are none."""
         # Compared without the packet id, at the encoded resolution.
-        payload = encode(0, **values)
+        payload = encode(0, **values) if values else None
         if payload != self._payload:
-            self._payload = payload
             self._packet_id = (self._packet_id + 1) & 0xFF
-        try:
-            self._ble.gap_advertise(
-                ADV_INTERVAL_MS * 1_000,
-                adv_data=encode(self._packet_id, **values),
-                resp_data=self._resp_data,
-                connectable=False,
-            )
-            await asyncio.sleep_ms(ADV_INTERVAL_MS // 2)
-        finally:
-            self._ble.gap_advertise(None)
-        self._last_sent = time.ticks_ms()
+            if values:
+                self._ble.gap_advertise(
+                    self._interval_us,
+                    adv_data=encode(self._packet_id, **values),
+                    resp_data=self._resp_data,
+                    connectable=False,
+                )
+            else:
+                self._ble.gap_advertise(None)
+            # Stored only now, so that a failed call is repeated by the next update.
+            self._payload = payload
+        self._last_ok = time.ticks_ms()
 
-    def since_sent_ms(self):
-        """Time since the last frame was broadcast without an error."""
-        return time.ticks_diff(time.ticks_ms(), self._last_sent)
+    def since_ok_ms(self):
+        """Time since the last update without an error."""
+        return time.ticks_diff(time.ticks_ms(), self._last_ok)
 
 
 class Readings:
     """Latest result of each sensor.
 
     A result is kept through failed measurements and dropped once max_failures
-    measurements in a row have failed, so it is no longer broadcast.
+    measurements in a row have failed, so it is no longer advertised.
     """
 
     def __init__(self, max_failures):
@@ -124,8 +121,8 @@ class Readings:
         return merged
 
 
-async def sample(name, sensor, readings):
-    """Measure once and store the result."""
+async def sample(name, sensor, readings, advertiser):
+    """Measure once, store the result and advertise the stored values."""
     try:
         values = await sensor.measure()
     # Whatever the cause, a failed measurement must be counted.
@@ -137,27 +134,18 @@ async def sample(name, sensor, readings):
         readings.store(name, values)
     # Free memory after the measurement, which allocates the most.
     gc.collect()
-
-
-async def broadcast(name, readings, advertiser):
-    """Broadcast the stored values as one frame; nothing is sent while there are none.
-
-    name is not used; it is only there because every job is called as job(name, *args).
-    """
-    values = readings.merged()
-    if values:
-        await advertiser.send(**values)
+    advertiser.update(**readings.merged())
 
 
 async def supervise(name, wdt, readings, advertiser, limit_ms):
     """Feed the hardware watchdog; reset the board unless, within limit_ms, a measurement of any
-    sensor has succeeded and a frame has been broadcast.
+    sensor has succeeded and the advertiser has been updated without an error.
 
     The watchdog is not fed when the event loop is blocked or this job keeps failing.
     """
     for what, idle_ms in (
         ("measurement", readings.since_success_ms()),
-        ("broadcast", advertiser.since_sent_ms()),
+        ("advertising", advertiser.since_ok_ms()),
     ):
         if idle_ms > limit_ms:
             print(name, "no successful", what, "for", limit_ms // 1_000, "s, resetting")
@@ -165,14 +153,13 @@ async def supervise(name, wdt, readings, advertiser, limit_ms):
     wdt.feed()
 
 
-async def every(name, period_s, job, *args, jitter_ms=0):
-    """Run job(name, *args) every period_s seconds plus a random -jitter_ms..+jitter_ms.
+async def every(name, period_s, job, *args):
+    """Run job(name, *args) every period_s seconds.
 
     An error in the job is logged, not fatal.
     """
     while True:
-        period_ms = period_s * 1_000 + random.randint(-jitter_ms, jitter_ms)
-        next_run = time.ticks_add(time.ticks_ms(), period_ms)
+        next_run = time.ticks_add(time.ticks_ms(), period_s * 1_000)
         try:
             await job(name, *args)
         except Exception as e:
@@ -181,32 +168,10 @@ async def every(name, period_s, job, *args, jitter_ms=0):
         await asyncio.sleep_ms(max(0, time.ticks_diff(next_run, time.ticks_ms())))
 
 
-def check_config():
-    """Raise ValueError for a setting that cannot work."""
-    for name, value, minimum in (
-        ("ENV_INTERVAL_S", ENV_INTERVAL_S, 1),
-        # Must be longer than one measurement.
-        ("PM25_INTERVAL_S", PM25_INTERVAL_S, MEASURE_S + 1),
-        ("MEASURE_ATTEMPTS", MEASURE_ATTEMPTS, 1),
-        ("ADV_PERIOD_S", ADV_PERIOD_S, 1),
-        ("ADV_JITTER_MS", ADV_JITTER_MS, 0),
-    ):
-        if not isinstance(value, int) or value < minimum:
-            raise ValueError(f"{name} must be an integer of at least {minimum}")
-    if ADV_PERIOD_S * 1_000 - ADV_JITTER_MS <= ADV_INTERVAL_MS:
-        raise ValueError("ADV_JITTER_MS too large for ADV_PERIOD_S")
-    if BME688_ADDR not in (0x76, 0x77):
-        raise ValueError("BME688_ADDR must be 0x76 or 0x77")
-    if not isinstance(ADV_NAME, str) or len(ADV_NAME.encode()) > ADV_NAME_MAX_LEN:
-        raise ValueError(f"ADV_NAME must be a string of at most {ADV_NAME_MAX_LEN} bytes")
-    if not isinstance(ADV_APPEARANCE, int) or not 0 <= ADV_APPEARANCE <= 0xFFFF:
-        raise ValueError("ADV_APPEARANCE must be an integer of 16 bits")
-
-
 def init(wdt):
     """Set up the hardware and return the periodic tasks."""
-    check_config()
     fan = machine.Pin(PIN_FAN, machine.Pin.OUT, value=0)
+    # timeout=0: reads do not block.
     uart = machine.UART(
         2,
         baudrate=BAUDRATE,
@@ -215,8 +180,7 @@ def init(wdt):
         stop=1,
         rx=PIN_PM_RX,
         tx=PIN_PM_TX,
-        timeout=UART_TIMEOUT_MS,
-        timeout_char=UART_TIMEOUT_CHAR_MS,
+        timeout=0,
     )
     i2c = machine.I2C(
         0,
@@ -232,12 +196,13 @@ def init(wdt):
 
     # Shared by the tasks below.
     readings = Readings(MEASURE_ATTEMPTS)
-    advertiser = Advertiser(ble, ADV_NAME, ADV_APPEARANCE)
-    limit_ms = 2 * max(ENV_INTERVAL_S, PM25_INTERVAL_S) * 1_000
+    advertiser = Advertiser(ble, ADV_PERIOD_S, ADV_NAME, ADV_APPEARANCE)
+    # One interval more than a stored result is kept for, so that the slower sensor alone is not
+    # reset for fewer failed measurements than MEASURE_ATTEMPTS allows.
+    limit_ms = (MEASURE_ATTEMPTS + 1) * max(ENV_INTERVAL_S, PM25_INTERVAL_S) * 1_000
     return [
-        every("PM25", PM25_INTERVAL_S, sample, PM1006(uart, fan), readings),
-        every("ENV", ENV_INTERVAL_S, sample, BME688(i2c, BME688_ADDR), readings),
-        every("BROADCAST", ADV_PERIOD_S, broadcast, readings, advertiser, jitter_ms=ADV_JITTER_MS),
+        every("PM25", PM25_INTERVAL_S, sample, PM1006(uart, fan), readings, advertiser),
+        every("ENV", ENV_INTERVAL_S, sample, BME688(i2c, BME688_ADDR), readings, advertiser),
         every("WATCHDOG", WDT_FEED_PERIOD_S, supervise, wdt, readings, advertiser, limit_ms),
     ]
 

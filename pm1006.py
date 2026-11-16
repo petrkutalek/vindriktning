@@ -1,9 +1,8 @@
 import asyncio
 
 BAUDRATE = 9_600
-# A response frame takes about 21 ms at 9600 baud; these are generous read limits.
-UART_TIMEOUT_MS = 200
-UART_TIMEOUT_CHAR_MS = 50
+# A response frame takes about 21 ms at 9600 baud; this is a generous wait for it.
+RESPONSE_WAIT_MS = 200
 REQUEST = b"\x11\x02\x0b\x01\xe1"
 RESPONSE_HEADER = b"\x16\x11\x0b"
 FRAME_LEN = 20
@@ -12,8 +11,6 @@ PM25_OFFSET = 5
 SPINUP_S = 15
 SAMPLE_COUNT = 5
 SAMPLE_GAP_S = 2
-# Duration of one measurement, without UART timeouts.
-MEASURE_S = SPINUP_S + (SAMPLE_COUNT - 1) * SAMPLE_GAP_S
 
 
 def trimmed_mean(values):
@@ -26,7 +23,7 @@ def trimmed_mean(values):
 
 
 class PM1006:
-    """PM1006 particle sensor on a UART, with a switchable fan.
+    """PM1006 particle sensor on a UART with timeout=0 (non-blocking), with a switchable fan.
 
     measure() returns {"pm25": ug/m3} or raises OSError if no sample was valid.
     """
@@ -43,7 +40,7 @@ class PM1006:
             for i in range(SAMPLE_COUNT):
                 if i:
                     await asyncio.sleep(SAMPLE_GAP_S)
-                value = self._read_pm25()
+                value = await self._read_pm25()
                 if value is not None:
                     samples.append(value)
         finally:
@@ -52,14 +49,13 @@ class PM1006:
             raise OSError("no valid response")
         return {"pm25": trimmed_mean(samples)}
 
-    def _read_pm25(self):
+    async def _read_pm25(self):
         # Returns None for an invalid frame; measure() skips such a sample.
-        pending = self._uart.any()
-        if pending:
-            # Drop stale bytes.
-            self._uart.read(pending)
+        # Drop stale bytes.
+        self._uart.read()
         self._uart.write(REQUEST)
-        frame = self._uart.read(FRAME_LEN)
+        await asyncio.sleep_ms(RESPONSE_WAIT_MS)
+        frame = self._uart.read()
         if (
             not frame
             or len(frame) != FRAME_LEN

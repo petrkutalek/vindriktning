@@ -40,7 +40,8 @@ class BME688:
     measure() returns {"temperature": degC, "humidity": %RH, "pressure": hPa}
     or raises OSError (I2C error, timeout, result out of range). Calibration is read on the
     first measure() and again after any failed one, so a sensor that is missing at boot only
-    fails there and is picked up once present.
+    fails there and is picked up once present. The compensation is the floating point variant of
+    the Bosch formulas, so the results are not identical to the integer variant.
     """
 
     def __init__(self, i2c, addr):
@@ -112,16 +113,12 @@ class BME688:
         }
 
     def _temperature(self, adc):
-        # Note: floating point calculation, so the result is not identical to the integer
-        # variant of the Bosch formulas.
         t1, t2, t3 = self._cal["t"]
         d = adc / 0x20000 - t1 / 0x2000
         t_fine = (adc / 0x4000 - t1 / 0x400) * t2 + d * d * t3 * 16
         return t_fine / 5_120, t_fine
 
     def _humidity(self, adc, temp):
-        # Note: floating point calculation, so the result is not identical to the integer
-        # variant of the Bosch formulas.
         h1, h2, h3, h4, h5, h6, h7 = self._cal["h"]
         var1 = adc - (h1 * 16 + h3 / 2 * temp)
         var2 = var1 * (h2 / 0x40000 * (1 + h4 / 0x4000 * temp + h5 / 0x100000 * temp * temp))
@@ -129,8 +126,6 @@ class BME688:
         return max(0.0, min(100.0, hum))
 
     def _pressure(self, adc, t_fine):
-        # Note: floating point calculation, so the result is not identical to the integer
-        # variant of the Bosch formulas.
         p1, p2, p3, p4, p5, p6, p7, p8, p9, p10 = self._cal["p"]
         var1 = t_fine / 2 - 64_000
         var2 = var1 * var1 * p6 / 0x20000

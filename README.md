@@ -14,21 +14,22 @@ Target: MicroPython 1.29 on ESP32.
 | Sensor  | Quantity                                 | BTHome object | Default interval |
 |---------|------------------------------------------|---------------|------------------|
 | PM1006  | PM2.5 (µg/m³)                            | `0x0D`        | 300 s            |
-| BME688  | temperature (0.01 °C)                    | `0x02`        | 30 s             |
-| BME688  | relative humidity (0.01 %)               | `0x03`        | 30 s             |
-| BME688  | pressure (0.01 hPa)                      | `0x04`        | 30 s             |
+| BME688  | temperature (0.01 °C)                    | `0x02`        | 60 s             |
+| BME688  | relative humidity (0.01 %)               | `0x03`        | 60 s             |
+| BME688  | pressure (0.01 hPa)                      | `0x04`        | 60 s             |
 
-The two measurements run as independent `asyncio` tasks at their own intervals, so the ~23 s fan
-spin-up and sampling of the PM1006 does not delay the BME688 readings. Each task only stores its
-latest result. A third task broadcasts the stored values every `ADV_PERIOD_S` seconds (5 s by
-default) in one frame, independently of the measurement intervals, and a fourth feeds the
-watchdog (see Runtime behaviour). Gas resistance is not measured; the BME688 gas heater stays
-off.
+The two measurements run as independent `asyncio` tasks at their own intervals, so the ~24 s fan
+spin-up and sampling of the PM1006 does not delay the BME688 readings. Each task stores its
+latest result and hands the stored values to the BLE controller, which advertises them every
+`ADV_PERIOD_S` seconds (10 s by default) in one frame, independently of the measurement
+intervals. A third task feeds the watchdog (see Runtime behaviour). Gas resistance is not
+measured; the BME688 gas heater stays off.
 
 ### PM2.5
 
 The fan is switched on, the sensor spins up for 15 s, 5 samples are taken 2 s apart, and the
 trimmed mean (lowest and highest sample dropped) is used. The fan is switched off afterwards.
+The UART is read without blocking: the response is collected 200 ms after each request.
 Frames are validated (header, length, checksum); invalid frames are skipped.
 
 ### BME688
@@ -66,22 +67,20 @@ from `ADV_NAME` (`Vindriktning`, at most 25 bytes) and the appearance from `ADV_
 03 19 42 05            appearance 0x0542
 ```
 
-The frame is broadcast once every `ADV_PERIOD_S` (5 s) plus a random -`ADV_JITTER_MS` to
-+`ADV_JITTER_MS` (100 ms), chosen anew for every period. A broadcast is a single advertising event:
-advertising is started with an interval of 100 ms and stopped 50 ms later, before the second event
-is due. Nothing is broadcast while there are no values.
+Advertising runs continuously with an advertising interval of `ADV_PERIOD_S` (10 s; the
+controller accepts at most 10.24 s and adds its own random delay of up to 10 ms to every event).
+It is restarted with new data only when the stored values change (compared at the encoded
+resolution, 0.01 °C, 0.01 % and 0.01 hPa) and stopped while there are no values.
 
-The packet id changes only when the transmitted data change (compared at the encoded resolution,
-0.01 °C, 0.01 % and 0.01 hPa). A repeated frame keeps its id, so BTHome receivers can recognise it
-as a duplicate and ignore it. The id starts at a random value after every boot.
+The packet id changes with the data. A repeated frame keeps its id, so BTHome receivers can
+recognise it as a duplicate and ignore it. The id starts at a random value after every boot.
 
 Advertising is non-connectable and the device has no BLE input, so nothing can connect to it. The
 frames are not encrypted: anyone in range can read the values.
 
-The name and appearance are sent as scan response data, but a non-connectable advertisement
-(`ADV_NONCONN_IND`) is not scannable, so receivers typically do not get them and identify the
-device by its BLE address, which is printed at boot. `gap_advertise()` has no scannable-only
-mode; `connectable=True` would make them visible, but then devices could also connect.
+The name and appearance are sent as scan response data. With `connectable=False` the NimBLE stack
+advertises as `ADV_SCAN_IND` (scannable, non-connectable), so a receiver gets them only when it
+scans actively. Otherwise it identifies the device by its BLE address, which is printed at boot.
 
 In Home Assistant the device appears through the BTHome integration (Bluetooth adapter or ESPHome
 Bluetooth proxy in range).
@@ -112,7 +111,7 @@ the pins above against your revision.
 | `bthome.py`        | BTHome v2 frame encoder (no hardware dependencies). |
 | `pm1006.py`        | PM1006 driver. |
 | `bme688.py`        | BME688 driver (temperature, pressure, humidity). |
-| `config.py`        | Per-device settings: measurement intervals, broadcast period and jitter, advertised name and appearance, BME688 address. Stays as plain `.py`. |
+| `config.py`        | Per-device settings: measurement intervals, advertising period, advertised name and appearance, BME688 address. Stays as plain `.py`. |
 | `Makefile`         | Compile, upload and reset targets. |
 
 ## Build and deploy
@@ -122,7 +121,8 @@ MicroPython release as the firmware (1.29), and only the `.mpy` files are upload
 
 Requirements: `make` and `mpremote` in `PATH`, and the `mpy-cross` 1.29.0 binary as
 `./mpy-cross-1.29.0` in the project directory (override with `MPY_CROSS`). It is run with
-`-O3 -march=xtensa` (override with `MPY_FLAGS`). The serial port defaults to `/dev/ttyUSB0`;
+`-O2 -march=xtensawin` (override with `MPY_FLAGS`; `-O3` would drop the line numbers from
+tracebacks). The serial port defaults to `/dev/ttyUSB0`;
 override it with `PORT`.
 
 ```sh
@@ -143,29 +143,29 @@ Do not leave `.py` copies of the compiled modules on the device.
 
 ## Runtime behaviour
 
-- The settings in `config.py` are checked at boot (types, minimum values, jitter against the
-  period, BME688 address, name length); an invalid setting is a fatal error (see below).
+- The settings in `config.py` are not validated; the limits are given in its comments. A value
+  that cannot work shows up as a logged error of the job that uses it, or as a fatal error at
+  boot (see below).
 - Both sensor drivers have the same interface: `await measure()` returns a dict of values or raises
   `OSError`. Any failed measurement (I2C error, no valid UART frame, value out of range, or any
   other exception) is logged in one line. The last result stays in the frame until
   `MEASURE_ATTEMPTS` (3) measurements in a row have failed; then it is dropped and no longer
-  broadcast until the next successful measurement.
-- An error in the broadcast job is logged with a traceback and the task carries on at the next
-  period. A fatal error in `main()` prints the traceback, waits 10 s and resets the board.
+  advertised until the next successful measurement.
+- The advertised data are updated after every measurement, successful or not. An error there is
+  logged with a traceback and the update is repeated after the next measurement.
+- A fatal error in `main()` prints the traceback, waits 10 s and resets the board.
 - A hardware watchdog (180 s) is started first and fed every 10 s by a dedicated job, which also
-  supervises the application: if, within twice the longer of `ENV_INTERVAL_S` and `PM25_INTERVAL_S`
-  (10 min by default), no measurement of either sensor has succeeded or no frame has been
-  broadcast without an error, it resets the board. If the event loop is blocked, the job does not
-  run and the hardware watchdog resets the board. The
-  watchdog cannot be stopped: after Ctrl-C in the REPL the board resets 180 s later.
+  supervises the application: if, within `MEASURE_ATTEMPTS` + 1 times the longer of
+  `ENV_INTERVAL_S` and `PM25_INTERVAL_S` (20 min by default), no measurement of either sensor has
+  succeeded or the advertised data have not been updated without an error, it resets the board.
+  If the event loop is blocked, the job does not run and the hardware watchdog resets the board.
+  The watchdog cannot be stopped: after Ctrl-C in the REPL the board resets 180 s later.
 - The board never enters deep sleep.
 
 ## Limitations
 
 - BME688 temperature is affected by heat from the board and fan; mount the module away from heat
   sources if absolute temperature matters.
-- A PM1006 UART read blocks the event loop for up to 200 ms (`UART_TIMEOUT_MS`) when the sensor
-  does not answer; normally it returns within a few tens of milliseconds.
-- A broadcast is a single advertising event, so a receiver that is not scanning at that moment
-  misses it; the next one follows after about `ADV_PERIOD_S`.
+- A receiver that is not scanning at the moment of an advertising event misses it; the next one
+  follows after `ADV_PERIOD_S`.
 - Frames are not encrypted (BTHome encryption is not implemented).
