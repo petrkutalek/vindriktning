@@ -9,6 +9,7 @@ PM25_OFFSET = 5
 SPINUP_S = 15
 SAMPLE_COUNT = 5
 SAMPLE_GAP_S = 2
+MEASURE_S = SPINUP_S + (SAMPLE_COUNT - 1) * SAMPLE_GAP_S  # without UART timeouts
 
 
 def trimmed_mean(values):

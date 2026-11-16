@@ -24,6 +24,10 @@ latest result. A third task broadcasts the stored values every `ADV_PERIOD_S` se
 default) in one frame, independently of the measurement intervals. Gas resistance is not measured;
 the BME688 gas heater stays off.
 
+The watchdog (see Runtime behaviour) can only judge jobs that run at least every 120 s. If both
+`ENV_INTERVAL_S` and `PM25_INTERVAL_S` are longer, the shorter one is lowered to 120 s at boot and
+the change is printed in the boot log.
+
 ### PM2.5
 
 The fan is switched on, the sensor spins up for 15 s, 5 samples are taken 2 s apart, and the
@@ -35,7 +39,8 @@ Frames are validated (header, length, checksum); invalid frames are skipped.
 Forced mode, oversampling T x2 / P x16 / H x1, IIR filter off. Compensation follows the Bosch
 BME688 datasheet (BST-BME688-DS000, floating point formulas). Calibration data is read on the
 first measurement, so a sensor that is missing at boot only causes a log line and is picked up once
-it responds.
+it responds. A result outside the datasheet range (-40...85 °C, 0...100 %RH, 300...1100 hPa) is a
+failed measurement.
 
 ## Advertisement
 
@@ -62,8 +67,9 @@ The frame is broadcast once every `ADV_PERIOD_S` (5 s) plus a random -`ADV_JITTE
 advertising is started with an interval of 100 ms and stopped 50 ms later, before the second event
 is due. Nothing is broadcast while there are no values.
 
-The packet id changes only when the transmitted values change. A repeated frame keeps its id, so
-BTHome receivers can recognise it as a duplicate and ignore it.
+The packet id changes only when the transmitted data change (compared at the encoded resolution,
+0.01 °C, 0.01 % and 0.01 hPa). A repeated frame keeps its id, so BTHome receivers can recognise it
+as a duplicate and ignore it. The id starts at a random value after every boot.
 
 Advertising is non-connectable and the device has no BLE input, so nothing can connect to it. The
 frames are not encrypted: anyone in range can read the values.
@@ -130,25 +136,22 @@ make deploy PORT=/dev/ttyACM0  # different serial port
 
 Do not leave `.py` copies of the compiled modules on the device.
 
-### Upgrading a board running the Wi-Fi version
-
-Remove the files that are no longer used (they contain the stored Wi-Fi credentials):
-
-```sh
-mpremote connect /dev/ttyUSB0 fs rm :secrets.mpy :secrets.enc
-```
-
 ## Runtime behaviour
 
+- The settings in `config.py` are checked at boot (types, minimum values, jitter against the
+  period, BME688 address, name length); an invalid setting is a fatal error (see below).
 - Both sensor drivers have the same interface: `await measure()` returns a dict of values or raises
-  `OSError`. A sensor that fails (I2C error, no valid UART frame) is logged in one line. Its last
-  result stays in the frame until `MEASURE_ATTEMPTS` (3) measurements in a row have failed; then it
-  is dropped and no longer broadcast until the next successful measurement.
-- Any other error in a cycle is logged with a traceback and the task carries on at the next
-  interval. A fatal error in `main()` prints the traceback, waits 10 s and resets the board.
-- A hardware watchdog (180 s) is started first and fed by a dedicated task. If anything blocks the
-  event loop, the board resets. The watchdog cannot be stopped: after Ctrl-C in the REPL the board
-  resets 180 s later.
+  `OSError`. Any failed measurement (I2C error, no valid UART frame, value out of range, or any
+  other exception) is logged in one line. The last result stays in the frame until
+  `MEASURE_ATTEMPTS` (3) measurements in a row have failed; then it is dropped and no longer
+  broadcast until the next successful measurement.
+- An error in the broadcast job is logged with a traceback and the task carries on at the next
+  period. A fatal error in `main()` prints the traceback, waits 10 s and resets the board.
+- A hardware watchdog (180 s) is started first. It is fed every 10 s as long as every job that
+  runs at least every 120 s (the broadcast and the faster measurement) has finished a run without
+  error within the last 180 s. A measurement that only fails does not stop the feeding. If a job
+  hangs, keeps raising errors, or the event loop is blocked, the board resets. The watchdog cannot
+  be stopped: after Ctrl-C in the REPL the board resets 180 s later.
 - The board never enters deep sleep.
 
 ## Limitations

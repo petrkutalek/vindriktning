@@ -19,13 +19,17 @@ MEASURE_WAIT_MS = 50  # ~42 ms for T x2 / P x16 / H x1
 POLL_MS = 10
 POLL_TRIES = 20
 
+# Operating range from the datasheet; a result outside it (or NaN) counts as a failed measurement.
+RANGES = {"temperature": (-40, 85), "humidity": (0, 100), "pressure": (300, 1100)}
+
 
 class BME688:
     """BME688 on I2C, forced mode, gas measurement off.
 
     measure() returns {"temperature": degC, "humidity": %RH, "pressure": hPa}
-    or raises OSError. Calibration is read on the first measure(), so a sensor
-    that is missing at boot only fails there and is picked up once present.
+    or raises OSError (I2C error, timeout, result out of range). Calibration is read on the
+    first measure(), so a sensor that is missing at boot only fails there and is picked up once
+    present.
     """
 
     def __init__(self, i2c, addr):
@@ -37,7 +41,11 @@ class BME688:
         if self._cal is None:
             self._cal = self._read_calibration()
         self._trigger()
-        return self._compensate(await self._read_field())
+        values = self._compensate(await self._read_field())
+        for name, (low, high) in RANGES.items():
+            if not low <= values[name] <= high:
+                raise OSError("out of range: " + name)
+        return values
 
     def _read(self, reg, length=1):
         return self._i2c.readfrom_mem(self._addr, reg, length)
