@@ -1,6 +1,9 @@
 import asyncio
 
 BAUDRATE = 9_600
+# A response frame takes about 21 ms at 9600 baud; these are generous read limits.
+UART_TIMEOUT_MS = 200
+UART_TIMEOUT_CHAR_MS = 50
 REQUEST = b"\x11\x02\x0b\x01\xe1"
 RESPONSE_HEADER = b"\x16\x11\x0b"
 FRAME_LEN = 20
@@ -9,7 +12,8 @@ PM25_OFFSET = 5
 SPINUP_S = 15
 SAMPLE_COUNT = 5
 SAMPLE_GAP_S = 2
-MEASURE_S = SPINUP_S + (SAMPLE_COUNT - 1) * SAMPLE_GAP_S  # without UART timeouts
+# Duration of one measurement, without UART timeouts.
+MEASURE_S = SPINUP_S + (SAMPLE_COUNT - 1) * SAMPLE_GAP_S
 
 
 def trimmed_mean(values):
@@ -52,7 +56,8 @@ class PM1006:
         # Returns None for an invalid frame; measure() skips such a sample.
         pending = self._uart.any()
         if pending:
-            self._uart.read(pending)  # drop stale bytes
+            # Drop stale bytes.
+            self._uart.read(pending)
         self._uart.write(REQUEST)
         frame = self._uart.read(FRAME_LEN)
         if (

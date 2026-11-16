@@ -21,12 +21,9 @@ Target: MicroPython 1.29 on ESP32.
 The two measurements run as independent `asyncio` tasks at their own intervals, so the ~23 s fan
 spin-up and sampling of the PM1006 does not delay the BME688 readings. Each task only stores its
 latest result. A third task broadcasts the stored values every `ADV_PERIOD_S` seconds (5 s by
-default) in one frame, independently of the measurement intervals. Gas resistance is not measured;
-the BME688 gas heater stays off.
-
-The watchdog (see Runtime behaviour) can only judge jobs that run at least every 120 s. If both
-`ENV_INTERVAL_S` and `PM25_INTERVAL_S` are longer, the shorter one is lowered to 120 s at boot and
-the change is printed in the boot log.
+default) in one frame, independently of the measurement intervals, and a fourth feeds the
+watchdog (see Runtime behaviour). Gas resistance is not measured; the BME688 gas heater stays
+off.
 
 ### PM2.5
 
@@ -38,9 +35,10 @@ Frames are validated (header, length, checksum); invalid frames are skipped.
 
 Forced mode, oversampling T x2 / P x16 / H x1, IIR filter off. Compensation follows the Bosch
 BME688 datasheet (BST-BME688-DS000, floating point formulas). Calibration data is read on the
-first measurement, so a sensor that is missing at boot only causes a log line and is picked up once
-it responds. A result outside the datasheet range (-40...85 °C, 0...100 %RH, 300...1100 hPa) is a
-failed measurement.
+first measurement and again after a failed one, so a sensor that is missing at boot only causes a
+log line and is picked up once it responds. A temperature outside -40...85 °C or a pressure
+outside 300...1100 hPa (datasheet range) is a failed measurement; humidity is limited to
+0...100 %RH.
 
 ## Advertisement
 
@@ -82,8 +80,8 @@ frames are not encrypted: anyone in range can read the values.
 
 The name and appearance are sent as scan response data, but a non-connectable advertisement
 (`ADV_NONCONN_IND`) is not scannable, so receivers typically do not get them and identify the
-device by its BLE address, which is printed at boot. `gap_advertise()` has no scannable-only mode; `connectable=True` would
-make them visible, but then devices could also connect.
+device by its BLE address, which is printed at boot. `gap_advertise()` has no scannable-only
+mode; `connectable=True` would make them visible, but then devices could also connect.
 
 In Home Assistant the device appears through the BTHome integration (Bluetooth adapter or ESPHome
 Bluetooth proxy in range).
@@ -123,8 +121,9 @@ Everything except `main.py` and `config.py` is compiled to `.mpy` with `mpy-cros
 MicroPython release as the firmware (1.29), and only the `.mpy` files are uploaded.
 
 Requirements: `make` and `mpremote` in `PATH`, and the `mpy-cross` 1.29.0 binary as
-`./mpy-cross-1.29.0` in the project directory (override with `MPY_CROSS`). The serial port defaults
-to `/dev/ttyUSB0`; override it with `PORT`.
+`./mpy-cross-1.29.0` in the project directory (override with `MPY_CROSS`). It is run with
+`-O3 -march=xtensa` (override with `MPY_FLAGS`). The serial port defaults to `/dev/ttyUSB0`;
+override it with `PORT`.
 
 ```sh
 make deploy                    # compile, upload and reset the board
@@ -153,11 +152,12 @@ Do not leave `.py` copies of the compiled modules on the device.
   broadcast until the next successful measurement.
 - An error in the broadcast job is logged with a traceback and the task carries on at the next
   period. A fatal error in `main()` prints the traceback, waits 10 s and resets the board.
-- A hardware watchdog (180 s) is started first. It is fed every 10 s as long as every job that
-  runs at least every 120 s (the broadcast and the faster measurement) has finished a run without
-  error within the last 180 s. A measurement that only fails does not stop the feeding. If a job
-  hangs, keeps raising errors, or the event loop is blocked, the board resets. The watchdog cannot
-  be stopped: after Ctrl-C in the REPL the board resets 180 s later.
+- A hardware watchdog (180 s) is started first and fed every 10 s by a dedicated job, which also
+  supervises the application: if, within twice the longer of `ENV_INTERVAL_S` and `PM25_INTERVAL_S`
+  (10 min by default), no measurement of either sensor has succeeded or no frame has been
+  broadcast without an error, it resets the board. If the event loop is blocked, the job does not
+  run and the hardware watchdog resets the board. The
+  watchdog cannot be stopped: after Ctrl-C in the REPL the board resets 180 s later.
 - The board never enters deep sleep.
 
 ## Limitations

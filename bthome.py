@@ -1,16 +1,22 @@
 import struct
 
 # BTHome v2 (https://bthome.io/format/), unencrypted, legacy advertisement.
-FLAGS = b"\x02\x01\x06"  # LE General Discoverable, BR/EDR not supported
-AD_SERVICE_DATA_16 = 0x16
-UUID = b"\xd2\xfc"  # 0xFCD2, little-endian
-DEVICE_INFO = 0x40  # version 2, no encryption, not trigger based
+# LE General Discoverable, BR/EDR not supported
+FLAGS = b"\x02\x01\x06"
+# 0xFCD2, little-endian
+UUID = b"\xd2\xfc"
+# version 2, no encryption, not trigger based
+DEVICE_INFO = 0x40
 
 ID_PACKET = 0x00
-ID_TEMPERATURE = 0x02  # sint16, 0.01 degC
-ID_HUMIDITY = 0x03  # uint16, 0.01 %
-ID_PRESSURE = 0x04  # uint24, 0.01 hPa
-ID_PM25 = 0x0D  # uint16, ug/m3
+# sint16, 0.01 degC
+ID_TEMPERATURE = 0x02
+# uint16, 0.01 %
+ID_HUMIDITY = 0x03
+# uint24, 0.01 hPa
+ID_PRESSURE = 0x04
+# uint16, ug/m3
+ID_PM25 = 0x0D
 
 
 def encode(packet_id, temperature=None, humidity=None, pressure=None, pm25=None):
@@ -27,8 +33,10 @@ def encode(packet_id, temperature=None, humidity=None, pressure=None, pm25=None)
     if humidity is not None:
         data += struct.pack("<BH", ID_HUMIDITY, round(humidity * 100))
     if pressure is not None:
-        data += struct.pack("<BI", ID_PRESSURE, round(pressure * 100))[:4]  # uint24
+        # uint24
+        data += struct.pack("<BI", ID_PRESSURE, round(pressure * 100))[:4]
     if pm25 is not None:
         data += struct.pack("<BH", ID_PM25, pm25)
     service = UUID + bytes((DEVICE_INFO,)) + data
-    return FLAGS + bytes((len(service) + 1, AD_SERVICE_DATA_16)) + service
+    # AD type 0x16: Service Data, 16-bit UUID.
+    return FLAGS + bytes((len(service) + 1, 0x16)) + service
