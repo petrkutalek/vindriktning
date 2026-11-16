@@ -10,16 +10,17 @@ import machine
 from bme688 import BME688
 from bthome import encode
 from config import (
-    ADV_COUNT,
-    ADV_INTERVAL_MS,
     ADV_JITTER_MS,
+    ADV_NAME,
+    ADV_PERIOD_S,
     BME688_ADDR,
     ENV_INTERVAL_S,
+    MEASURE_ATTEMPTS,
     PM25_INTERVAL_S,
 )
 from pm1006 import BAUDRATE, PM1006
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 # Board wiring (LaskaKit ESP-VINDRIKTNING ESP-32 I2C).
 PIN_FAN = 12
@@ -31,63 +32,106 @@ I2C_FREQ_HZ = 100_000
 UART_TIMEOUT_MS = 200
 UART_TIMEOUT_CHAR_MS = 50
 
+ADV_INTERVAL_MS = 100
+
 WDT_TIMEOUT_S = 180
 WDT_FEED_PERIOD_S = 10
 FATAL_RESET_DELAY_S = 10
 
 
 class Advertiser:
-    """Broadcasts one BTHome v2 frame `count` times, then stops advertising.
+    """Broadcasts one BTHome v2 frame as a single advertising event.
 
-    Only freshly measured values are sent; nothing is remembered between calls.
-    The advertising interval is interval_ms plus a random -jitter_ms..+jitter_ms,
-    chosen anew for every send.
-    Advertising is non-connectable, so nothing can connect to the device.
-    The lock serializes callers because the radio can advertise only one frame at a time.
+    Advertising is started and stopped half an interval later, before the second event is due.
+    The packet id changes only when the values change, so receivers can recognise a repeated
+    frame as a duplicate. Advertising is non-connectable, so nothing can connect to the device.
     """
 
-    def __init__(self, ble, count, interval_ms, jitter_ms):
+    def __init__(self, ble, name):
         self._ble = ble
-        self._count = count
-        self._interval_ms = interval_ms
-        self._jitter_ms = jitter_ms
-        self._lock = asyncio.Lock()
+        name = name.encode()
+        if len(name) > 29:
+            raise ValueError("name longer than 29 bytes")
+        # Scan response: AD structure with type 0x09 (Complete Local Name).
+        self._resp_data = bytes((len(name) + 1, 0x09)) + name
+        self._values = None
         self._packet_id = 0
 
     async def send(self, **values):
-        async with self._lock:
+        if values != self._values:
+            self._values = values
             self._packet_id = (self._packet_id + 1) & 0xFF
-            interval_ms = self._interval_ms + random.randint(-self._jitter_ms, self._jitter_ms)
-            try:
-                self._ble.gap_advertise(
-                    interval_ms * 1_000,
-                    adv_data=encode(self._packet_id, **values),
-                    connectable=False,
-                )
-                # Events go out at 0..count-1 intervals; stop half an interval after the last one.
-                await asyncio.sleep_ms(interval_ms * (2 * self._count - 1) // 2)
-            finally:
-                self._ble.gap_advertise(None)
+        try:
+            self._ble.gap_advertise(
+                ADV_INTERVAL_MS * 1_000,
+                adv_data=encode(self._packet_id, **values),
+                resp_data=self._resp_data,
+                connectable=False,
+            )
+            await asyncio.sleep_ms(ADV_INTERVAL_MS // 2)
+        finally:
+            self._ble.gap_advertise(None)
 
 
-async def sample(sensor, advertiser):
-    """Measure once and broadcast the result; a failed measurement sends nothing."""
+class Readings:
+    """Latest result of each sensor.
+
+    A result is kept through failed measurements and dropped once max_failures
+    measurements in a row have failed, so it is no longer broadcast.
+    """
+
+    def __init__(self, max_failures):
+        self._max_failures = max_failures
+        self._values = {}
+        self._failures = {}
+
+    def store(self, name, values):
+        self._values[name] = values
+        self._failures[name] = 0
+
+    def fail(self, name):
+        self._failures[name] = self._failures.get(name, 0) + 1
+        if self._failures[name] >= self._max_failures and name in self._values:
+            del self._values[name]
+            print(name, "dropped after", self._failures[name], "failed measurements")
+
+    def merged(self):
+        merged = {}
+        for values in self._values.values():
+            merged.update(values)
+        return merged
+
+
+async def sample(sensor, readings):
+    """Measure once and store the result."""
     name = type(sensor).__name__
     try:
         values = await sensor.measure()
     except OSError as e:
         print(name, "failed:", e)
+        readings.fail(name)
         return
     print(name, values)
-    await advertiser.send(**values)
+    readings.store(name, values)
 
 
-async def every(period_s, sensor, advertiser):
-    """Run sample() every period_s seconds; an unexpected error is logged, not fatal."""
+async def broadcast(readings, advertiser):
+    """Broadcast the stored values as one frame; nothing is sent while there are none."""
+    values = readings.merged()
+    if values:
+        await advertiser.send(**values)
+
+
+async def every(period_s, job, *args, jitter_ms=0):
+    """Run job(*args) every period_s seconds plus a random -jitter_ms..+jitter_ms.
+
+    An unexpected error in the job is logged, not fatal.
+    """
     while True:
-        next_run = time.ticks_add(time.ticks_ms(), period_s * 1_000)
+        period_ms = period_s * 1_000 + random.randint(-jitter_ms, jitter_ms)
+        next_run = time.ticks_add(time.ticks_ms(), period_ms)
         try:
-            await sample(sensor, advertiser)
+            await job(*args)
         except Exception as e:
             sys.print_exception(e)
         gc.collect()
@@ -127,10 +171,12 @@ def init():
     mac = ":".join(f"{b:02X}" for b in ble.config("mac")[1])
     print("boot: version", VERSION, "BLE address", mac)
 
-    advertiser = Advertiser(ble, ADV_COUNT, ADV_INTERVAL_MS, ADV_JITTER_MS)
+    readings = Readings(MEASURE_ATTEMPTS)  # shared by the tasks below
+    advertiser = Advertiser(ble, ADV_NAME)
     return [
-        every(PM25_INTERVAL_S, PM1006(uart, fan), advertiser),
-        every(ENV_INTERVAL_S, BME688(i2c, BME688_ADDR), advertiser),
+        every(PM25_INTERVAL_S, sample, PM1006(uart, fan), readings),
+        every(ENV_INTERVAL_S, sample, BME688(i2c, BME688_ADDR), readings),
+        every(ADV_PERIOD_S, broadcast, readings, advertiser, jitter_ms=ADV_JITTER_MS),
     ]
 
 

@@ -18,10 +18,11 @@ Target: MicroPython 1.29 on ESP32.
 | BME688  | relative humidity (0.01 %)               | `0x03`        | 30 s             |
 | BME688  | pressure (0.01 hPa)                      | `0x04`        | 30 s             |
 
-The two intervals are independent (`asyncio`): the ~23 s fan spin-up and sampling of the PM1006
-does not delay the BME688 readings. Temperature, humidity and pressure are sent together in one
-frame; PM2.5 is sent in its own frame. Gas resistance is not measured; the BME688 gas heater
-stays off.
+The two measurements run as independent `asyncio` tasks at their own intervals, so the ~23 s fan
+spin-up and sampling of the PM1006 does not delay the BME688 readings. Each task only stores its
+latest result. A third task broadcasts the stored values every `ADV_PERIOD_S` seconds (5 s by
+default) in one frame, independently of the measurement intervals. Gas resistance is not measured;
+the BME688 gas heater stays off.
 
 ### PM2.5
 
@@ -38,40 +39,41 @@ it responds.
 
 ## Advertisement
 
-Two legacy advertisement frames are used, each well under the 31 byte limit.
-
-Environment frame (20 B), sent after every BME688 measurement (30 s):
+All stored values go out in one legacy advertisement (23 of 31 bytes). A value that does not exist
+(its sensor has not answered yet, or its measurement failed `MEASURE_ATTEMPTS` times in a row) is
+left out of the frame.
 
 ```
 02 01 06            flags
-10 16 D2 FC         service data, UUID 0xFCD2 (BTHome)
+13 16 D2 FC         service data, UUID 0xFCD2 (BTHome)
 40                  device info: BTHome v2, not encrypted
-00 NN               packet id (incremented for every frame sent)
+00 NN               packet id
 02 TT TT            temperature, sint16, 0.01 °C
 03 HH HH            humidity, uint16, 0.01 %
 04 PP PP PP         pressure, uint24, 0.01 hPa
+0D MM MM            PM2.5, uint16, µg/m³
 ```
 
-PM2.5 frame (13 B), sent after every PM1006 measurement (300 s):
+All multi-byte values are little-endian. The scan response data carries the complete local name
+from `ADV_NAME` (`Vindriktning`).
 
-```
-02 01 06 09 16 D2 FC 40 00 NN 0D MM MM      (PM2.5, uint16, µg/m³)
-```
+The frame is broadcast once every `ADV_PERIOD_S` (5 s) plus a random -`ADV_JITTER_MS` to
++`ADV_JITTER_MS` (100 ms), chosen anew for every period. A broadcast is a single advertising event:
+advertising is started with an interval of 100 ms and stopped 50 ms later, before the second event
+is due. Nothing is broadcast while there are no values.
 
-All multi-byte values are little-endian. Each frame is sent `ADV_COUNT` (3) times: advertising is
-started with an interval of `ADV_INTERVAL_MS` (500 ms) plus a random -`ADV_JITTER_MS` to
-+`ADV_JITTER_MS` (20 ms), chosen anew for every send, and stopped half an interval after the last
-event, so the three events go out at about 0, 1 and 2 intervals (about 1.25 s per send). The same
-applies to both frames.
+The packet id changes only when the transmitted values change. A repeated frame keeps its id, so
+BTHome receivers can recognise it as a duplicate and ignore it.
 
-Nothing is remembered between measurements: a failed measurement sends no frame, and between
-frames the device is silent. The radio can advertise one frame at a time, so sends are serialized
-(a send that is due while another is running waits for it). Advertising is non-connectable and the
-device has no BLE input, so nothing can connect to it. The frames are not encrypted: anyone in
-range can read the values.
+Advertising is non-connectable and the device has no BLE input, so nothing can connect to it. The
+frames are not encrypted: anyone in range can read the values.
 
-The device has no BLE name and is identified by its BLE address, which is printed at boot.
-In Home Assistant it appears through the BTHome integration (Bluetooth adapter or ESPHome
+The name is sent as scan response data, but a non-connectable advertisement (`ADV_NONCONN_IND`) is
+not scannable, so receivers typically do not get it and identify the device by its BLE address,
+which is printed at boot. `gap_advertise()` has no scannable-only mode; `connectable=True` would
+make the name visible, but then devices could also connect.
+
+In Home Assistant the device appears through the BTHome integration (Bluetooth adapter or ESPHome
 Bluetooth proxy in range).
 
 ## Hardware
@@ -100,7 +102,7 @@ the pins above against your revision.
 | `bthome.py`        | BTHome v2 frame encoder (no hardware dependencies). |
 | `pm1006.py`        | PM1006 driver. |
 | `bme688.py`        | BME688 driver (temperature, pressure, humidity). |
-| `config.py`        | Per-device settings: measurement intervals, advertising count, interval and jitter, BME688 address. Stays as plain `.py`. |
+| `config.py`        | Per-device settings: measurement intervals, broadcast period and jitter, advertised name, BME688 address. Stays as plain `.py`. |
 | `Makefile`         | Compile, upload and reset targets. |
 
 ## Build and deploy
@@ -108,8 +110,9 @@ the pins above against your revision.
 Everything except `main.py` and `config.py` is compiled to `.mpy` with `mpy-cross` from the same
 MicroPython release as the firmware (1.29), and only the `.mpy` files are uploaded.
 
-Requirements: `make`, `mpy-cross` and `mpremote` in `PATH`. The serial port defaults to
-`/dev/ttyUSB0`; override it with `PORT`.
+Requirements: `make` and `mpremote` in `PATH`, and the `mpy-cross` 1.29.0 binary as
+`./mpy-cross-1.29.0` in the project directory (override with `MPY_CROSS`). The serial port defaults
+to `/dev/ttyUSB0`; override it with `PORT`.
 
 ```sh
 make deploy                    # compile, upload and reset the board
@@ -138,8 +141,9 @@ mpremote connect /dev/ttyUSB0 fs rm :secrets.mpy :secrets.enc
 ## Runtime behaviour
 
 - Both sensor drivers have the same interface: `await measure()` returns a dict of values or raises
-  `OSError`. A sensor that fails (I2C error, no valid UART frame) is logged in one line, nothing is
-  sent for that cycle, and the next cycle tries again.
+  `OSError`. A sensor that fails (I2C error, no valid UART frame) is logged in one line. Its last
+  result stays in the frame until `MEASURE_ATTEMPTS` (3) measurements in a row have failed; then it
+  is dropped and no longer broadcast until the next successful measurement.
 - Any other error in a cycle is logged with a traceback and the task carries on at the next
   interval. A fatal error in `main()` prints the traceback, waits 10 s and resets the board.
 - A hardware watchdog (180 s) is started first and fed by a dedicated task. If anything blocks the
@@ -153,4 +157,6 @@ mpremote connect /dev/ttyUSB0 fs rm :secrets.mpy :secrets.enc
   sources if absolute temperature matters.
 - A PM1006 UART read blocks the event loop for up to 200 ms (`UART_TIMEOUT_MS`) when the sensor
   does not answer; normally it returns within a few tens of milliseconds.
+- A broadcast is a single advertising event, so a receiver that is not scanning at that moment
+  misses it; the next one follows after about `ADV_PERIOD_S`.
 - Frames are not encrypted (BTHome encryption is not implemented).

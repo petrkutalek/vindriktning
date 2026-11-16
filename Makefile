@@ -1,5 +1,5 @@
 PORT        ?= /dev/ttyUSB0
-MPY_CROSS   ?= mpy-cross
+MPY_CROSS   ?= ./mpy-cross-1.29.0
 MPREMOTE    ?= mpremote connect $(PORT)
 
 MODULES := app pm1006 bme688 bthome
