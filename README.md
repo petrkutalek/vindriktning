@@ -60,7 +60,13 @@ left out of the frame.
 ```
 
 All multi-byte values are little-endian. The scan response data carries the complete local name
-from `ADV_NAME` (`Vindriktning`).
+from `ADV_NAME` (`Vindriktning`, at most 25 bytes) and the appearance from `ADV_APPEARANCE`
+(`0x0542`, air quality sensor, AD type `0x19`):
+
+```
+0D 09 "Vindriktning"   complete local name
+03 19 42 05            appearance 0x0542
+```
 
 The frame is broadcast once every `ADV_PERIOD_S` (5 s) plus a random -`ADV_JITTER_MS` to
 +`ADV_JITTER_MS` (100 ms), chosen anew for every period. A broadcast is a single advertising event:
@@ -74,10 +80,10 @@ as a duplicate and ignore it. The id starts at a random value after every boot.
 Advertising is non-connectable and the device has no BLE input, so nothing can connect to it. The
 frames are not encrypted: anyone in range can read the values.
 
-The name is sent as scan response data, but a non-connectable advertisement (`ADV_NONCONN_IND`) is
-not scannable, so receivers typically do not get it and identify the device by its BLE address,
-which is printed at boot. `gap_advertise()` has no scannable-only mode; `connectable=True` would
-make the name visible, but then devices could also connect.
+The name and appearance are sent as scan response data, but a non-connectable advertisement
+(`ADV_NONCONN_IND`) is not scannable, so receivers typically do not get them and identify the
+device by its BLE address, which is printed at boot. `gap_advertise()` has no scannable-only mode; `connectable=True` would
+make them visible, but then devices could also connect.
 
 In Home Assistant the device appears through the BTHome integration (Bluetooth adapter or ESPHome
 Bluetooth proxy in range).
@@ -108,7 +114,7 @@ the pins above against your revision.
 | `bthome.py`        | BTHome v2 frame encoder (no hardware dependencies). |
 | `pm1006.py`        | PM1006 driver. |
 | `bme688.py`        | BME688 driver (temperature, pressure, humidity). |
-| `config.py`        | Per-device settings: measurement intervals, broadcast period and jitter, advertised name, BME688 address. Stays as plain `.py`. |
+| `config.py`        | Per-device settings: measurement intervals, broadcast period and jitter, advertised name and appearance, BME688 address. Stays as plain `.py`. |
 | `Makefile`         | Compile, upload and reset targets. |
 
 ## Build and deploy

@@ -12,8 +12,10 @@ MEASURE_ATTEMPTS = 3
 ADV_PERIOD_S = 5
 ADV_JITTER_MS = 100
 
-# Complete local name sent as scan response data (at most 29 bytes).
+# Scan response data: complete local name (at most 25 bytes) and appearance (0x0542 = air
+# quality sensor, Bluetooth SIG Assigned Numbers).
 ADV_NAME = "Vindriktning"
+ADV_APPEARANCE = 0x0542
 
 # BME688 I2C address: 0x76 (SDO to GND) or 0x77 (SDO to VDDIO)
 BME688_ADDR = 0x77

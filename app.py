@@ -10,6 +10,7 @@ import machine
 from bme688 import BME688
 from bthome import encode
 from config import (
+    ADV_APPEARANCE,
     ADV_JITTER_MS,
     ADV_NAME,
     ADV_PERIOD_S,
@@ -20,7 +21,7 @@ from config import (
 )
 from pm1006 import BAUDRATE, MEASURE_S, PM1006
 
-VERSION = "2.0.2"
+VERSION = "2.0.3"
 
 # Board wiring (LaskaKit ESP-VINDRIKTNING ESP-32 I2C).
 PIN_FAN = 12
@@ -33,7 +34,8 @@ UART_TIMEOUT_MS = 200
 UART_TIMEOUT_CHAR_MS = 50
 
 ADV_INTERVAL_MS = 100
-ADV_NAME_MAX_LEN = 29  # 31 bytes of scan response data minus the 2 byte AD structure header
+# 31 bytes of scan response data minus the headers of the name (2 bytes) and appearance (4 bytes).
+ADV_NAME_MAX_LEN = 25
 
 WDT_TIMEOUT_S = 180
 WDT_FEED_PERIOD_S = 10
@@ -79,11 +81,16 @@ class Advertiser:
     repeated frame as a duplicate. Advertising is non-connectable, so nothing can connect.
     """
 
-    def __init__(self, ble, name):
+    def __init__(self, ble, name, appearance):
         self._ble = ble
         name = name.encode()
-        # Scan response: AD structure with type 0x09 (Complete Local Name).
-        self._resp_data = bytes((len(name) + 1, 0x09)) + name
+        # Scan response: AD structures Complete Local Name (0x09) and Appearance (0x19).
+        self._resp_data = (
+            bytes((len(name) + 1, 0x09))
+            + name
+            + bytes((3, 0x19))
+            + appearance.to_bytes(2, "little")
+        )
         self._payload = None
         # Random start, so that the first frame after a reboot is not taken for a duplicate.
         self._packet_id = random.getrandbits(8)
@@ -193,6 +200,8 @@ def check_config():
         raise ValueError("BME688_ADDR must be 0x76 or 0x77")
     if not isinstance(ADV_NAME, str) or len(ADV_NAME.encode()) > ADV_NAME_MAX_LEN:
         raise ValueError(f"ADV_NAME must be a string of at most {ADV_NAME_MAX_LEN} bytes")
+    if not isinstance(ADV_APPEARANCE, int) or not 0 <= ADV_APPEARANCE <= 0xFFFF:
+        raise ValueError("ADV_APPEARANCE must be an integer of 16 bits")
 
 
 def measure_intervals():
@@ -237,7 +246,7 @@ def init(watchdog):
     env_s, pm25_s = measure_intervals()
 
     readings = Readings(MEASURE_ATTEMPTS)  # shared by the tasks below
-    advertiser = Advertiser(ble, ADV_NAME)
+    advertiser = Advertiser(ble, ADV_NAME, ADV_APPEARANCE)
     return [
         every("PM25", pm25_s, sample, PM1006(uart, fan), readings, watchdog=watchdog),
         every("ENV", env_s, sample, BME688(i2c, BME688_ADDR), readings, watchdog=watchdog),
