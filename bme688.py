@@ -38,31 +38,35 @@ class BME688:
     """BME688 on I2C, forced mode, gas measurement off.
 
     measure() returns {"temperature": degC, "humidity": %RH, "pressure": hPa}
-    or raises OSError (I2C error, timeout, result out of range). Calibration is read on the
-    first measure() and again after any failed one, so a sensor that is missing at boot only
-    fails there and is picked up once present. The compensation is the floating point variant of
-    the Bosch formulas, so the results are not identical to the integer variant.
+    or raises OSError (I2C error, timeout, result out of range). It waits for air_lock, which is
+    held while the PM1006 fan runs, and holds it itself while measuring, so the fan cannot start
+    during a measurement. Calibration is read on the first measure() and again after any failed
+    one, so a sensor that is missing at boot only fails there and is picked up once present. The
+    compensation is the floating point variant of the Bosch formulas, so the results are not
+    identical to the integer variant.
     """
 
-    def __init__(self, i2c, addr):
+    def __init__(self, i2c, addr, air_lock):
         self._i2c = i2c
         self._addr = addr
+        self._air_lock = air_lock
         self._cal = None
 
     async def measure(self):
-        try:
-            if self._cal is None:
-                self._cal = self._read_calibration()
-            self._trigger()
-            values = self._compensate(await self._read_field())
-            for name, (low, high) in RANGES.items():
-                if not low <= values[name] <= high:
-                    raise OSError("out of range: " + name)
-            return values
-        except Exception:
-            # The calibration may be what is wrong, so it is read again at the next attempt.
-            self._cal = None
-            raise
+        async with self._air_lock:
+            try:
+                if self._cal is None:
+                    self._cal = self._read_calibration()
+                self._trigger()
+                values = self._compensate(await self._read_field())
+                for name, (low, high) in RANGES.items():
+                    if not low <= values[name] <= high:
+                        raise OSError("out of range: " + name)
+                return values
+            except Exception:
+                # The calibration may be what is wrong, so it is read again at the next attempt.
+                self._cal = None
+                raise
 
     def _read(self, reg, length):
         return self._i2c.readfrom_mem(self._addr, reg, length)

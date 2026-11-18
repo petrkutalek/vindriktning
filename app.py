@@ -197,23 +197,27 @@ def init(wdt):
     # Shared by the tasks below.
     readings = Readings(MEASURE_ATTEMPTS)
     advertiser = Advertiser(ble, ADV_PERIOD_S, ADV_NAME, ADV_APPEARANCE)
+    # Held while the PM1006 fan runs and during a BME688 measurement, so they never overlap.
+    air_lock = asyncio.Lock()
     # One interval more than a stored result is kept for, so that the slower sensor alone is not
     # reset for fewer failed measurements than MEASURE_ATTEMPTS allows.
     limit_ms = (MEASURE_ATTEMPTS + 1) * max(ENV_INTERVAL_S, PM25_INTERVAL_S) * 1_000
+    pm1006 = PM1006(uart, fan, air_lock)
+    bme688 = BME688(i2c, BME688_ADDR, air_lock)
     return [
-        every("PM25", PM25_INTERVAL_S, sample, PM1006(uart, fan), readings, advertiser),
-        every("ENV", ENV_INTERVAL_S, sample, BME688(i2c, BME688_ADDR), readings, advertiser),
+        every("PM25", PM25_INTERVAL_S, sample, pm1006, readings, advertiser),
+        every("ENV", ENV_INTERVAL_S, sample, bme688, readings, advertiser),
         every("WATCHDOG", WDT_FEED_PERIOD_S, supervise, wdt, readings, advertiser, limit_ms),
     ]
 
 
 def main():
     async def run():
-        # Started first, so that a hang during init() is covered as well.
-        wdt = machine.WDT(timeout=WDT_TIMEOUT_S * 1_000)
         await asyncio.gather(*init(wdt))
 
     try:
+        # Started first, so that a hang during init() is covered as well.
+        wdt = machine.WDT(timeout=WDT_TIMEOUT_S * 1_000)
         asyncio.run(run())
     except Exception as e:
         sys.print_exception(e)

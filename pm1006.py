@@ -25,26 +25,29 @@ def trimmed_mean(values):
 class PM1006:
     """PM1006 particle sensor on a UART with timeout=0 (non-blocking), with a switchable fan.
 
-    measure() returns {"pm25": ug/m3} or raises OSError if no sample was valid.
+    measure() returns {"pm25": ug/m3} or raises OSError if no sample was valid. The asyncio lock
+    air_lock is held while the fan runs, so that the BME688 does not measure meanwhile.
     """
 
-    def __init__(self, uart, fan):
+    def __init__(self, uart, fan, air_lock):
         self._uart = uart
         self._fan = fan
+        self._air_lock = air_lock
 
     async def measure(self):
         samples = []
-        self._fan.on()
-        try:
-            await asyncio.sleep(SPINUP_S)
-            for i in range(SAMPLE_COUNT):
-                if i:
-                    await asyncio.sleep(SAMPLE_GAP_S)
-                value = await self._read_pm25()
-                if value is not None:
-                    samples.append(value)
-        finally:
-            self._fan.off()
+        async with self._air_lock:
+            self._fan.on()
+            try:
+                await asyncio.sleep(SPINUP_S)
+                for i in range(SAMPLE_COUNT):
+                    if i:
+                        await asyncio.sleep(SAMPLE_GAP_S)
+                    value = await self._read_pm25()
+                    if value is not None:
+                        samples.append(value)
+            finally:
+                self._fan.off()
         if not samples:
             raise OSError("no valid response")
         return {"pm25": trimmed_mean(samples)}

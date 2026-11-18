@@ -19,11 +19,12 @@ Target: MicroPython 1.29 on ESP32.
 | BME688  | pressure (0.01 hPa)                      | `0x04`        | 60 s             |
 
 The two measurements run as independent `asyncio` tasks at their own intervals, so the ~24 s fan
-spin-up and sampling of the PM1006 does not delay the BME688 readings. Each task stores its
-latest result and hands the stored values to the BLE controller, which advertises them every
-`ADV_PERIOD_S` seconds (10 s by default) in one frame, independently of the measurement
-intervals. A third task feeds the watchdog (see Runtime behaviour). Gas resistance is not
-measured; the BME688 gas heater stays off.
+spin-up and sampling of the PM1006 does not delay the BME688 readings. A BME688 measurement
+waits until the fan run is over, because the airflow would disturb it, and the fan cannot start
+during a BME688 measurement either. Each task stores its latest result and hands the stored values to
+the BLE controller, which advertises them every `ADV_PERIOD_S` seconds (10 s by default) in one
+frame, independently of the measurement intervals. A third task feeds the watchdog (see Runtime
+behaviour). Gas resistance is not measured; the BME688 gas heater stays off.
 
 ### PM2.5
 
