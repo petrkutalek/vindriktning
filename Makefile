@@ -3,26 +3,35 @@ MPREMOTE    ?= mpremote connect $(PORT)
 MPY_CROSS   ?= ./mpy-cross-1.29.0
 MPY_FLAGS   ?= -O2 -march=xtensawin
 
-MODULES := app pm1006 bme688 bthome config
-MPY     := $(MODULES:%=%.mpy)
-PLAIN   := main.py
+BUILD   := build
 
-.PHONY: all build upload reset deploy repl clean
+MODULES := app pm1006 bme688 bthome config
+PLAIN   := main.py
+FILES   := $(MODULES:%=$(BUILD)/%.mpy) $(PLAIN:%=$(BUILD)/%)
+
+.PHONY: all build upload reset deploy repl clean pkg
 
 all: deploy
 
-build: $(MPY)
+build: $(FILES)
 
-%.mpy: %.py
-	$(MPY_CROSS) $(MPY_FLAGS) $<
+$(BUILD)/%.mpy: %.py
+	@mkdir -p $(@D)
+	$(MPY_CROSS) $(MPY_FLAGS) -o $@ $<
+
+$(BUILD)/%.py: %.py
+	@mkdir -p $(@D)
+	cp $< $@
 
 upload: build
-	$(MPREMOTE) fs cp $(MPY) $(PLAIN) :
+	cd $(BUILD) && $(MPREMOTE) fs cp $(notdir $(FILES)) :
+
+pkg: build
+	tar cvzf app.tgz -C $(BUILD) $(notdir $(FILES))
 
 reset:
 	$(MPREMOTE) reset
 
-# The reset must follow the upload, also with make -j: two mpremote processes cannot share the port.
 deploy: upload
 	$(MPREMOTE) reset
 
@@ -30,4 +39,4 @@ repl:
 	$(MPREMOTE) repl
 
 clean:
-	rm -f $(MPY)
+	rm -rf $(BUILD) app.tgz

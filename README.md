@@ -113,12 +113,13 @@ the pins above against your revision.
 | `pm1006.py`        | PM1006 driver. |
 | `bme688.py`        | BME688 driver (temperature, pressure, humidity). |
 | `config.py`        | Per-device settings: measurement intervals, advertising period, advertised name and appearance, BME688 address. |
-| `Makefile`         | Compile, upload and reset targets. |
+| `Makefile`         | Compile, upload, package and reset targets. |
 
 ## Build and deploy
 
 Everything except `main.py` is compiled to `.mpy` with `mpy-cross` from the same
-MicroPython release as the firmware (1.29), and only the `.mpy` files are uploaded.
+MicroPython release as the firmware (1.29), and only the `.mpy` files are uploaded. The files for
+the board (the `.mpy` files and a copy of `main.py`) are collected in the `build/` directory.
 
 Requirements: `make` and `mpremote` in `PATH`, and the `mpy-cross` 1.29.0 binary as
 `./mpy-cross-1.29.0` in the project directory (override with `MPY_CROSS`). It is run with
@@ -133,12 +134,13 @@ make deploy PORT=/dev/ttyACM0  # different serial port
 
 | Target    | Action |
 |-----------|--------|
-| `build`   | Compile `app`, `pm1006`, `bme688`, `bthome` and `config` to `.mpy`. |
-| `upload`  | Build, then copy the `.mpy` files, `main.py` to the board. |
+| `build`   | Compile `app`, `pm1006`, `bme688`, `bthome` and `config` to `.mpy` and copy `main.py`, all into `build/`. |
+| `upload`  | Build, then copy the files from `build/` to the board. |
+| `pkg`     | Build, then pack the files from `build/` into `app.tgz`. |
 | `reset`   | Reset the board. |
 | `deploy`  | `upload` + `reset` (default target). |
 | `repl`    | Open the serial console. |
-| `clean`   | Remove the compiled `.mpy` files. |
+| `clean`   | Remove `build/` and `app.tgz`. |
 
 Do not leave `.py` copies of the compiled modules on the device.
 

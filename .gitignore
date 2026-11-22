@@ -1,2 +1,5 @@
 *.mpy
 mpy-cross-*
+build/
+images/
+ANALYZA.txt
