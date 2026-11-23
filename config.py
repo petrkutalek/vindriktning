@@ -3,8 +3,8 @@
 # Measurement intervals in whole seconds (integers). PM25_INTERVAL_S: at least 30, longer than
 # one PM2.5 measurement (about 29 s). ENV_INTERVAL_S: at least 1.
 # (MEASURE_ATTEMPTS + 1) times the longer interval must stay under 6 days (range of ticks_ms).
-PM25_INTERVAL_S = 300
-ENV_INTERVAL_S = 60
+PM25_INTERVAL_S = 600
+ENV_INTERVAL_S = 120
 
 # A stored result is dropped, and no longer advertised, when this many measurements of its sensor
 # in a row have failed. It is stored again by the next successful measurement.

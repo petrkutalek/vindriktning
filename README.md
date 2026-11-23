@@ -13,10 +13,10 @@ Target: MicroPython 1.29 on ESP32.
 
 | Sensor  | Quantity                                 | BTHome object | Default interval |
 |---------|------------------------------------------|---------------|------------------|
-| PM1006  | PM2.5 (µg/m³)                            | `0x0D`        | 300 s            |
-| BME688  | temperature (0.01 °C)                    | `0x02`        | 60 s             |
-| BME688  | relative humidity (0.01 %)               | `0x03`        | 60 s             |
-| BME688  | pressure (0.01 hPa)                      | `0x04`        | 60 s             |
+| PM1006  | PM2.5 (µg/m³)                            | `0x0D`        | 600 s            |
+| BME688  | temperature (0.01 °C)                    | `0x02`        | 120 s            |
+| BME688  | relative humidity (1 %)                  | `0x2E`        | 120 s            |
+| BME688  | pressure (0.01 hPa)                      | `0x04`        | 120 s            |
 
 The two measurements run as independent `asyncio` tasks at their own intervals, so the ~29 s fan
 spin-up and sampling of the PM1006 does not delay the BME688 readings. A BME688 measurement
@@ -44,19 +44,19 @@ outside 300...1100 hPa (datasheet range) is a failed measurement; humidity is li
 
 ## Advertisement
 
-All stored values go out in one legacy advertisement (23 of 31 bytes). A value that does not exist
+All stored values go out in one legacy advertisement (22 of 31 bytes). A value that does not exist
 (its sensor has not answered yet, or its measurement failed `MEASURE_ATTEMPTS` times in a row) is
 left out of the frame.
 
 ```
 02 01 06            flags
-13 16 D2 FC         service data, UUID 0xFCD2 (BTHome)
+12 16 D2 FC         service data, UUID 0xFCD2 (BTHome)
 40                  device info: BTHome v2, not encrypted
 00 NN               packet id
 02 TT TT            temperature, sint16, 0.01 °C
-03 HH HH            humidity, uint16, 0.01 %
 04 PP PP PP         pressure, uint24, 0.01 hPa
 0D MM MM            PM2.5, uint16, µg/m³
+2E HH               humidity, uint8, 1 %
 ```
 
 All multi-byte values are little-endian. The scan response data carries the complete local name
@@ -71,7 +71,10 @@ from `ADV_NAME` (`Vindriktning`, at most 25 bytes) and the appearance from `ADV_
 Advertising runs continuously with an advertising interval of `ADV_PERIOD_S` (5 s; the
 controller accepts at most 10.24 s and adds its own random delay of up to 10 ms to every event).
 It is restarted with new data only when the stored values change (compared at the encoded
-resolution, 0.01 °C, 0.01 % and 0.01 hPa) and stopped while there are no values.
+resolution) and stopped while there are no values. The BME688 driver rounds temperature
+to 0.1 °C, humidity to 1 % and pressure to 0.1 hPa, in line with the accuracy of the sensor, so
+the advertised values change in these steps. Temperature and pressure are still encoded with a
+resolution of 0.01; humidity is a whole percent.
 
 The packet id changes with the data. A repeated frame keeps its id, so BTHome receivers can
 recognise it as a duplicate and ignore it. The id starts at a random value after every boot.
@@ -159,7 +162,7 @@ Do not leave `.py` copies of the compiled modules on the device.
 - A fatal error in `main()` prints the traceback, waits 10 s and resets the board.
 - A hardware watchdog (180 s) is started first and fed every 10 s by a dedicated job, which also
   supervises the application: if, within `MEASURE_ATTEMPTS` + 1 times the longer of
-  `ENV_INTERVAL_S` and `PM25_INTERVAL_S` (20 min by default), no measurement of either sensor has
+  `ENV_INTERVAL_S` and `PM25_INTERVAL_S` (40 min by default), no measurement of either sensor has
   succeeded or the advertised data have not been updated without an error, it resets the board.
   If the event loop is blocked, the job does not run and the hardware watchdog resets the board.
   The watchdog cannot be stopped: after Ctrl-C in the REPL the board resets 180 s later.

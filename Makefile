@@ -7,6 +7,7 @@ BUILD   := build
 
 MODULES := app pm1006 bme688 bthome config
 PLAIN   := main.py
+# Everything that goes to the board: the compiled modules and the plain files, all in $(BUILD).
 FILES   := $(MODULES:%=$(BUILD)/%.mpy) $(PLAIN:%=$(BUILD)/%)
 
 .PHONY: all build upload reset deploy repl clean pkg
@@ -15,12 +16,13 @@ all: deploy
 
 build: $(FILES)
 
+# mkdir -p is safe with make -j. $(BUILD) is not a rule target: it would clash with `build`.
 $(BUILD)/%.mpy: %.py
-	@mkdir -p $(@D)
+	mkdir -p $(@D)
 	$(MPY_CROSS) $(MPY_FLAGS) -o $@ $<
 
 $(BUILD)/%.py: %.py
-	@mkdir -p $(@D)
+	mkdir -p $(@D)
 	cp $< $@
 
 upload: build
@@ -32,6 +34,7 @@ pkg: build
 reset:
 	$(MPREMOTE) reset
 
+# The reset must follow the upload, also with make -j: two mpremote processes cannot share the port.
 deploy: upload
 	$(MPREMOTE) reset
 
