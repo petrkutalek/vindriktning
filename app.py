@@ -20,7 +20,7 @@ from config import (
 )
 from pm1006 import BAUDRATE, PM1006
 
-VERSION = "2.1.2"
+VERSION = "2.2.0"
 
 # Board wiring (LaskaKit ESP-VINDRIKTNING ESP-32 I2C).
 PIN_FAN = 12

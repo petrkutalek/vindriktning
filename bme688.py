@@ -37,13 +37,13 @@ RANGES = {"temperature": (-40, 85), "pressure": (300, 1_100)}
 class BME688:
     """BME688 on I2C, forced mode, gas measurement off.
 
-    measure() returns {"temperature": degC, "humidity": %RH, "pressure": hPa}
-    or raises OSError (I2C error, timeout, result out of range). It waits for air_lock, which is
-    held while the PM1006 fan runs, and holds it itself while measuring, so the fan cannot start
-    during a measurement. Calibration is read on the first measure() and again after any failed
-    one, so a sensor that is missing at boot only fails there and is picked up once present. The
-    compensation is the floating point variant of the Bosch formulas, so the results are not
-    identical to the integer variant.
+    measure() returns {"temperature": degC, "humidity": %RH, "pressure": hPa}, rounded to 0.1 degC,
+    1 %RH and 0.1 hPa, or raises OSError (I2C error, timeout, result out of range). It waits for
+    air_lock, which is held while the PM1006 fan runs, and holds it itself while measuring, so the
+    fan cannot start during a measurement. Calibration is read on the first measure() and again
+    after any failed one, so a sensor that is missing at boot only fails there and is picked up
+    once present. The compensation is the floating point variant of the Bosch formulas, so the
+    results are not identical to the integer variant.
     """
 
     def __init__(self, i2c, addr, air_lock):
@@ -62,7 +62,12 @@ class BME688:
                 for name, (low, high) in RANGES.items():
                     if not low <= values[name] <= high:
                         raise OSError("out of range: " + name)
-                return values
+                # Rounded in line with the accuracy of the sensor.
+                return {
+                    "temperature": round(values["temperature"], 1),
+                    "humidity": round(values["humidity"]),
+                    "pressure": round(values["pressure"], 1),
+                }
             except Exception:
                 # The calibration may be what is wrong, so it is read again at the next attempt.
                 self._cal = None
