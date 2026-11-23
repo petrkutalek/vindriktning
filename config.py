@@ -1,7 +1,7 @@
 # The values are not validated at boot; keep them within the limits given here.
 
-# Measurement intervals in whole seconds (integers). PM25_INTERVAL_S: at least 25, longer than
-# one PM2.5 measurement (about 24 s). ENV_INTERVAL_S: at least 1.
+# Measurement intervals in whole seconds (integers). PM25_INTERVAL_S: at least 30, longer than
+# one PM2.5 measurement (about 29 s). ENV_INTERVAL_S: at least 1.
 # (MEASURE_ATTEMPTS + 1) times the longer interval must stay under 6 days (range of ticks_ms).
 PM25_INTERVAL_S = 300
 ENV_INTERVAL_S = 60
@@ -13,7 +13,7 @@ MEASURE_ATTEMPTS = 3
 
 # The latest measurements are advertised once every ADV_PERIOD_S seconds in one BTHome frame.
 # Integer, 1..10 (the advertising interval of the controller is 10.24 s at most).
-ADV_PERIOD_S = 10
+ADV_PERIOD_S = 5
 
 # Scan response data: complete local name and appearance (0x0542 = air quality sensor,
 # Bluetooth SIG Assigned Numbers).

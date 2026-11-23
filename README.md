@@ -18,17 +18,17 @@ Target: MicroPython 1.29 on ESP32.
 | BME688  | relative humidity (0.01 %)               | `0x03`        | 60 s             |
 | BME688  | pressure (0.01 hPa)                      | `0x04`        | 60 s             |
 
-The two measurements run as independent `asyncio` tasks at their own intervals, so the ~24 s fan
+The two measurements run as independent `asyncio` tasks at their own intervals, so the ~29 s fan
 spin-up and sampling of the PM1006 does not delay the BME688 readings. A BME688 measurement
 waits until the fan run is over, because the airflow would disturb it, and the fan cannot start
 during a BME688 measurement either. Each task stores its latest result and hands the stored values to
-the BLE controller, which advertises them every `ADV_PERIOD_S` seconds (10 s by default) in one
+the BLE controller, which advertises them every `ADV_PERIOD_S` seconds (5 s by default) in one
 frame, independently of the measurement intervals. A third task feeds the watchdog (see Runtime
 behaviour). Gas resistance is not measured; the BME688 gas heater stays off.
 
 ### PM2.5
 
-The fan is switched on, the sensor spins up for 15 s, 5 samples are taken 2 s apart, and the
+The fan is switched on, the sensor spins up for 20 s, 5 samples are taken 2 s apart, and the
 trimmed mean (lowest and highest sample dropped) is used. The fan is switched off afterwards.
 The UART is read without blocking: the response is collected 200 ms after each request.
 Frames are validated (header, length, checksum); invalid frames are skipped.
@@ -68,7 +68,7 @@ from `ADV_NAME` (`Vindriktning`, at most 25 bytes) and the appearance from `ADV_
 03 19 42 05            appearance 0x0542
 ```
 
-Advertising runs continuously with an advertising interval of `ADV_PERIOD_S` (10 s; the
+Advertising runs continuously with an advertising interval of `ADV_PERIOD_S` (5 s; the
 controller accepts at most 10.24 s and adds its own random delay of up to 10 ms to every event).
 It is restarted with new data only when the stored values change (compared at the encoded
 resolution, 0.01 °C, 0.01 % and 0.01 hPa) and stopped while there are no values.
@@ -163,6 +163,15 @@ Do not leave `.py` copies of the compiled modules on the device.
   succeeded or the advertised data have not been updated without an error, it resets the board.
   If the event loop is blocked, the job does not run and the hardware watchdog resets the board.
   The watchdog cannot be stopped: after Ctrl-C in the REPL the board resets 180 s later.
+- The CPU frequency is set to 80 MHz (`CPU_FREQ_HZ` in `app.py`) at start-up, before the
+  peripherals are initialised, to reduce the heat that the BME688 picks up from the ESP32. The
+  boot log shows the frequency in use. Do not go below 80 MHz: the ESP32 needs at least 80 MHz
+  for Bluetooth, and boards locked up at 20 and 40 MHz in the MicroPython tests (MicroPython PR
+  #19612). `machine.freq()` sets a fixed frequency (`esp_pm_configure()` with the same minimum
+  and maximum, no light sleep) and raises `ValueError` if that fails; power management is enabled
+  in the MicroPython 1.29 ESP32 base configuration (`CONFIG_PM_ENABLE=y`). A `ValueError` at
+  start-up is a fatal error, so the board would reset every 10 s: set `CPU_FREQ_HZ` back to the
+  value that `machine.freq()` returns in the REPL.
 - The board never enters deep sleep.
 
 ## Limitations

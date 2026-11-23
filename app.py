@@ -20,7 +20,7 @@ from config import (
 )
 from pm1006 import BAUDRATE, PM1006
 
-VERSION = "2.1.0"
+VERSION = "2.1.2"
 
 # Board wiring (LaskaKit ESP-VINDRIKTNING ESP-32 I2C).
 PIN_FAN = 12
@@ -29,6 +29,9 @@ PIN_PM_TX = 17
 PIN_I2C_SDA = 21
 PIN_I2C_SCL = 22
 I2C_FREQ_HZ = 100_000
+
+# Lower than the default to reduce the heat the BME688 picks up from the ESP32.
+CPU_FREQ_HZ = 80_000_000
 
 WDT_TIMEOUT_S = 180
 WDT_FEED_PERIOD_S = 10
@@ -192,7 +195,7 @@ def init(wdt):
     ble = bluetooth.BLE()
     ble.active(True)
     mac = ":".join(f"{b:02X}" for b in ble.config("mac")[1])
-    print("boot: version", VERSION, "BLE address", mac)
+    print("boot: version", VERSION, "CPU", machine.freq() // 1_000_000, "MHz, BLE address", mac)
 
     # Shared by the tasks below.
     readings = Readings(MEASURE_ATTEMPTS)
@@ -218,6 +221,8 @@ def main():
     try:
         # Started first, so that a hang during init() is covered as well.
         wdt = machine.WDT(timeout=WDT_TIMEOUT_S * 1_000)
+        # Before the peripherals are set up.
+        machine.freq(CPU_FREQ_HZ)
         asyncio.run(run())
     except Exception as e:
         sys.print_exception(e)
